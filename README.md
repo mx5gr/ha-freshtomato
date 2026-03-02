@@ -137,7 +137,7 @@ In FreshTomato navigate to `Administration → Admin Access`. The **Web Admin ID
 
 ## Supported Firmware
 
-Tested on FreshTomato 2026.1 (ARM). The integration targets the `update.cgi` API which has been stable across all FreshTomato and upstream Tomato versions. Older builds may not expose all nvram variables; missing sensors degrade gracefully to Unavailable rather than causing errors.
+Tested on FreshTomato 2026.1 (ARM) and HA 2026.2.3 . The integration targets the `update.cgi` API which has been stable across all FreshTomato and upstream Tomato versions. Older builds may not expose all nvram variables; missing sensors degrade gracefully to Unavailable rather than causing errors.
 
 ---
 
