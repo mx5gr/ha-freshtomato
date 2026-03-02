@@ -1,0 +1,39 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to FreshTomato Router",
+        "description": "Enter your FreshTomato router details. The HTTP ID can be found by viewing the page source of your router's admin interface and searching for 'http_id'.",
+        "data": {
+          "host": "Router IP / Hostname",
+          "port": "Port",
+          "ssl": "Use HTTPS",
+          "verify_ssl": "Verify SSL Certificate",
+          "username": "Username",
+          "password": "Password",
+          "http_id": "HTTP ID (from router page source)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect to router. Check host, port and credentials.",
+      "invalid_auth": "Invalid username or password.",
+      "invalid_http_id": "Invalid HTTP ID. Please verify by checking the router's page source.",
+      "unknown": "Unexpected error. Check logs for details."
+    },
+    "abort": {
+      "already_configured": "This router is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "FreshTomato Options",
+        "data": {
+          "scan_interval": "Poll Interval (seconds)",
+          "track_wired": "Track wired devices (DHCP clients)"
+        }
+      }
+    }
+  }
+}
