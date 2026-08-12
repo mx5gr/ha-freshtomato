@@ -64,6 +64,12 @@ class RouterData:
     eth_ports:        dict[str, str] = field(default_factory=dict)
     # Multi-WAN: one WanConnection per active WAN; list index 0 == WAN1
     wan_connections:  list[WanConnection] = field(default_factory=list)
+    # System status / performance metrics (from sysinfo in status-data.jsx)
+    sysinfo:          dict[str, Any] = field(default_factory=dict)
+    cpu_load:         float | None = None
+    ram_load:         float | None = None
+    uptime_str:       str | None = None
+    uptime_seconds:   int | None = None
 
 
 class FreshTomatoAPI:
@@ -215,15 +221,16 @@ class FreshTomatoAPI:
 
     async def fetch_nvram_from_asp(
         self, variables: list[str]
-    ) -> tuple[dict[str, str], dict[int, bool]]:
-        """Scrape nvram and wlstats from status-data.jsx.
+    ) -> tuple[dict[str, str], dict[int, bool], dict[str, Any]]:
+        """Scrape nvram, wlstats, and sysinfo from status-data.jsx.
 
         Returns
         -------
-        (nvram_dict, wl_hw_radio)
+        (nvram_dict, wl_hw_radio, sysinfo_dict)
             nvram_dict   – filtered nvram key/value strings
             wl_hw_radio  – {unit_index: hw_radio_on} from wlstats[N].radio
                            radio field: 1 = RF on, 0 = RF off
+            sysinfo_dict – parsed sysinfo object from status-data.jsx
         """
         url     = f"{self._base_url}/status-data.jsx"
         headers = {"Referer": f"{self._base_url}/status-overview.asp"}
@@ -263,14 +270,9 @@ class FreshTomatoAPI:
             if key in variables:
                 nvram_result[key] = val
 
-        # Parse wlstats array — present in status-data.jsx as:
-        #   wlstats = [ { radio: 1, client: 1, channel: 13, ... }, ... ]
-        #
-        # FreshTomato JS treats this as a standard boolean:
-        #   if (wlstats[uidx].radio) { /* show stats — radio is ON */ }
-        # So: radio = 1 → RF hardware ON, radio = 0 → RF hardware OFF.
-        # This is the same convention as the wlN_radio nvram key.
+        # Parse wlstats array and sysinfo object
         wl_hw_radio: dict[int, bool] = {}
+        sysinfo_result: dict[str, Any] = {}
         parsed_all = self._parse_js_vars(text)
         wlstats_raw = parsed_all.get("wlstats")
         if isinstance(wlstats_raw, list):
@@ -283,7 +285,11 @@ class FreshTomatoAPI:
                         pass
             _LOGGER.debug("wlstats hw_radio parsed (1=on, 0=off): %r", wl_hw_radio)
 
-        return nvram_result, wl_hw_radio
+        sysinfo_raw = parsed_all.get("sysinfo")
+        if isinstance(sysinfo_raw, dict):
+            sysinfo_result = sysinfo_raw
+
+        return nvram_result, wl_hw_radio, sysinfo_result
 
     async def fetch_firmware_version(self) -> str | None:
         """Try exec=nvram for firmware build strings."""

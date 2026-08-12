@@ -45,6 +45,7 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
+    PERCENTAGE,
     SIGNAL_STRENGTH_DECIBELS_MILLIWATT,
     UnitOfDataRate,
     UnitOfInformation,
@@ -190,6 +191,38 @@ SYSTEM_SENSORS: tuple[FreshTomatoSensorDescription, ...] = (
         name="Router Model",
         icon="mdi:router-wireless",
         value_fn=lambda d: d.nvram.get("t_model_name") or None,
+    ),
+    FreshTomatoSensorDescription(
+        key="cpu_load",
+        name="CPU Load",
+        icon="mdi:chip",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda d: d.cpu_load,
+    ),
+    FreshTomatoSensorDescription(
+        key="ram_load",
+        name="RAM Load",
+        icon="mdi:memory",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda d: d.ram_load,
+    ),
+    FreshTomatoSensorDescription(
+        key="system_uptime",
+        name="System Uptime",
+        icon="mdi:timer-outline",
+        native_unit_of_measurement=UnitOfTime.SECONDS,
+        device_class=SensorDeviceClass.DURATION,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda d: d.uptime_seconds,
+    ),
+    FreshTomatoSensorDescription(
+        key="system_uptime_text",
+        name="System Uptime (Text)",
+        icon="mdi:timer-outline",
+        entity_registry_enabled_default=False,
+        value_fn=lambda d: d.uptime_str,
     ),
     FreshTomatoSensorDescription(
         key="total_clients",

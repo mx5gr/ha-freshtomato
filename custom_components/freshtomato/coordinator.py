@@ -84,6 +84,10 @@ class FreshTomatoCoordinator(DataUpdateCoordinator[RouterData]):
         # SSH command.  Radio switch does not use cooldown.
         # {unit_index: float (monotonic time)}
         self.iface_cooldown_until: dict[int, float] = {}
+        # CPU jiffies state for delta calculation
+        self._last_total_jiffies: int | None = None
+        self._last_idle_jiffies: int | None = None
+        self._sysinfo_cache: dict[str, Any] = {}
 
         super().__init__(
             hass,
@@ -139,6 +143,20 @@ class FreshTomatoCoordinator(DataUpdateCoordinator[RouterData]):
             _parse_etherstates_dict(etherstates, data)
             _parse_netdev(netdev_raw, data)
 
+            # Update sysinfo cache from devlist response if present, or fetch status-data
+            inline_sysinfo = devlist_raw.get("sysinfo")
+            if isinstance(inline_sysinfo, dict) and inline_sysinfo:
+                self._sysinfo_cache.update(inline_sysinfo)
+            else:
+                try:
+                    _, wl_hw_radio, sysinfo_res = await self.api.fetch_nvram_from_asp(NVRAM_VARS)
+                    if wl_hw_radio:
+                        self._wl_hw_radio.update(wl_hw_radio)
+                    if sysinfo_res:
+                        self._sysinfo_cache.update(sysinfo_res)
+                except Exception as err:
+                    _LOGGER.debug("Failed to update sysinfo: %s", err)
+
             if self._cycle_count == 1 or (self._cycle_count % NVRAM_REFRESH_INTERVAL == 0):
                 await self._refresh_nvram()
 
@@ -160,6 +178,18 @@ class FreshTomatoCoordinator(DataUpdateCoordinator[RouterData]):
         data.nvram = dict(self._nvram_cache)
         # Populate live hardware radio state from the last wlstats refresh.
         data.wl_hw_radio = dict(self._wl_hw_radio)
+
+        # Process system performance metrics (CPU, RAM, Uptime)
+        data.sysinfo = dict(self._sysinfo_cache)
+        if data.sysinfo:
+            cpu_pct, self._last_total_jiffies, self._last_idle_jiffies = _compute_cpu_load(
+                data.sysinfo, self._last_total_jiffies, self._last_idle_jiffies
+            )
+            data.cpu_load = cpu_pct
+            data.ram_load = _compute_ram_load(data.sysinfo)
+            data.uptime_str = _format_uptime(data.sysinfo)
+            raw_up = data.sysinfo.get("uptime")
+            data.uptime_seconds = _safe_int(raw_up) if raw_up is not None else None
 
         # ── Build wan_connections list (supports 1–MWAN_MAX WANs) ──────────
         # WAN1 uses the legacy unprefixed keys (wan_ipaddr, wan_proto, …).
@@ -227,13 +257,15 @@ class FreshTomatoCoordinator(DataUpdateCoordinator[RouterData]):
                 self._nvram_supported = False
 
         try:
-            nvram_result, wl_hw_radio = await self.api.fetch_nvram_from_asp(NVRAM_VARS)
+            nvram_result, wl_hw_radio, sysinfo_result = await self.api.fetch_nvram_from_asp(NVRAM_VARS)
             if nvram_result:
                 self._safe_nvram_update(nvram_result)
                 if self._nvram_supported is None:
                     self._nvram_supported = False  # exec=nvram not used
             if wl_hw_radio:
                 self._wl_hw_radio.update(wl_hw_radio)
+            if sysinfo_result:
+                self._sysinfo_cache.update(sysinfo_result)
         except CannotConnect as err:
             _LOGGER.warning("NVRAM ASP fallback failed: %s", err)
 
@@ -463,3 +495,86 @@ def _safe_int(value: Any) -> int:
         return int(value)
     except (TypeError, ValueError):
         return 0
+
+
+def _compute_cpu_load(
+    sysinfo: dict[str, Any],
+    last_total: int | None,
+    last_idle: int | None,
+) -> tuple[float | None, int | None, int | None]:
+    """Compute CPU load percentage (0.0 - 100.0) from jiffies in sysinfo."""
+    raw_jiffies = sysinfo.get("jiffies")
+    if not isinstance(raw_jiffies, str):
+        return None, last_total, last_idle
+
+    tokens = raw_jiffies.strip().split()
+    jiffylist: list[int] = []
+    for token in tokens:
+        try:
+            jiffylist.append(int(token))
+        except ValueError:
+            pass
+
+    if len(jiffylist) < 4:
+        return None, last_total, last_idle
+
+    total_jiffies = sum(jiffylist)
+    idle_jiffies = jiffylist[3]
+
+    if last_total is not None and last_idle is not None:
+        diff_total = total_jiffies - last_total
+        diff_idle = idle_jiffies - last_idle
+        if diff_total > 0:
+            pct = 100.0 * (diff_total - diff_idle) / diff_total
+            pct = max(0.0, min(100.0, round(pct, 2)))
+            return pct, total_jiffies, idle_jiffies
+
+    if total_jiffies > 0:
+        pct = 100.0 * (total_jiffies - idle_jiffies) / total_jiffies
+        pct = max(0.0, min(100.0, round(pct, 2)))
+        return pct, total_jiffies, idle_jiffies
+
+    return None, total_jiffies, idle_jiffies
+
+
+def _compute_ram_load(sysinfo: dict[str, Any]) -> float | None:
+    """Compute RAM load percentage (0.0 - 100.0) from sysinfo."""
+    total_ram = _safe_int(sysinfo.get("totalram"))
+    if total_ram <= 0:
+        return None
+
+    free_ram = sysinfo.get("totalfreeram")
+    if free_ram is None or _safe_int(free_ram) <= 0:
+        freeram = _safe_int(sysinfo.get("freeram"))
+        bufferram = _safe_int(sysinfo.get("bufferram"))
+        cached = _safe_int(sysinfo.get("cached"))
+        free_ram = freeram + bufferram + cached
+
+    free_ram = _safe_int(free_ram)
+    used_ram = total_ram - free_ram
+    pct = (used_ram / total_ram) * 100.0
+    return max(0.0, min(100.0, round(pct, 2)))
+
+
+def _format_uptime(sysinfo: dict[str, Any]) -> str | None:
+    """Format system uptime into a human-readable string (e.g. '37 days, 03h 08m 34s')."""
+    raw_sec = sysinfo.get("uptime")
+    if raw_sec is not None:
+        try:
+            total_sec = int(raw_sec)
+            days = total_sec // 86400
+            hours = (total_sec % 86400) // 3600
+            minutes = (total_sec % 3600) // 60
+            seconds = total_sec % 60
+            if days > 0:
+                day_str = f"{days} day{'s' if days != 1 else ''}"
+                return f"{day_str}, {hours:02d}h {minutes:02d}m {seconds:02d}s"
+            return f"{hours:02d}h {minutes:02d}m {seconds:02d}s"
+        except (ValueError, TypeError):
+            pass
+
+    raw_s = sysinfo.get("uptime_s")
+    if isinstance(raw_s, str) and raw_s.strip():
+        return raw_s.strip()
+
+    return None
