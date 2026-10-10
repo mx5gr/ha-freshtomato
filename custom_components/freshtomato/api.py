@@ -93,7 +93,14 @@ class FreshTomatoAPI:
             await self._session.close()
 
     async def _post_update_cgi(self, body: str) -> str:
-        url = f"{self._base_url}/update.cgi"
+        return await self._post_cgi("update.cgi", body)
+
+    async def _post_tomato_cgi(self, body: str) -> str:
+        return await self._post_cgi("tomato.cgi", body)
+
+    async def _post_cgi(self, endpoint: str, body: str) -> str:
+        url = f"{self._base_url}/{endpoint}"
+        body = f"_http_id={self._http_id}&{body}"
         headers = {
             "Content-Type": "application/x-www-form-urlencoded",
             "Referer":      f"{self._base_url}/status-overview.asp",
@@ -169,18 +176,18 @@ class FreshTomatoAPI:
         return result
 
     async def test_connection(self) -> bool:
-        await self._post_update_cgi(f"_http_id={self._http_id}&exec=devlist")
+        await self._post_update_cgi("exec=devlist")
         return True
 
     async def fetch_devlist(self) -> dict[str, Any]:
         """Fetch exec=devlist — returns wldev, wlnoise, dhcpd_lease, arplist,
         nvram subset, etherstates, gc_time in one response."""
-        text = await self._post_update_cgi(f"_http_id={self._http_id}&exec=devlist")
+        text = await self._post_update_cgi("exec=devlist")
         return self._parse_js_vars(text)
 
     async def fetch_netdev(self) -> dict[str, Any]:
         """Fetch exec=netdev — per-interface byte counters."""
-        text   = await self._post_update_cgi(f"_http_id={self._http_id}&exec=netdev")
+        text   = await self._post_update_cgi("exec=netdev")
         parsed = self._parse_js_vars(text)
         netdev = parsed.get("netdev", {})
         if isinstance(netdev, dict) and netdev:
@@ -205,7 +212,7 @@ class FreshTomatoAPI:
 
     async def fetch_nvram(self, variables: list[str]) -> dict[str, str]:
         """Try exec=nvram. Returns empty dict if unsupported."""
-        body   = f"_http_id={self._http_id}&exec=nvram&_nvram={'+'.join(variables)}"
+        body   = f"exec=nvram&_nvram={'+'.join(variables)}"
         text   = await self._post_update_cgi(body)
         parsed = self._parse_js_vars(text)
         nvram  = parsed.get("nvram", {})
@@ -289,8 +296,7 @@ class FreshTomatoAPI:
         """Try exec=nvram for firmware build strings."""
         for var in ("t_build_time", "t_build", "os_version", "tomato_version"):
             try:
-                text   = await self._post_update_cgi(
-                    f"_http_id={self._http_id}&exec=nvram&_nvram={var}")
+                text   = await self._post_update_cgi(f"exec=nvram&_nvram={var}")
                 parsed = self._parse_js_vars(text)
                 nvram  = parsed.get("nvram", {})
                 if isinstance(nvram, dict) and nvram.get(var):
@@ -307,7 +313,7 @@ class FreshTomatoAPI:
         keys from unsupported builds are silently dropped.
         Keys with value "disabled" indicate ports absent on this hardware.
         """
-        body   = f"_http_id={self._http_id}&exec=etherstates"
+        body   = "exec=etherstates"
         text   = await self._post_update_cgi(body)
         parsed = self._parse_js_vars(text)
         raw    = parsed.get("etherstates", {})
@@ -364,6 +370,9 @@ class FreshTomatoAPI:
         _LOGGER.debug("fetch_about_page: no version found in about.asp")
         return None
 
+    async def reboot(self) -> None:
+        """Reboot the router via the FreshTomato admin CGI."""
+        await self._post_tomato_cgi("_reboot=1")
 
 
 class CannotConnect(Exception):
